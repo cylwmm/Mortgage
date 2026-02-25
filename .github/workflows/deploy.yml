@@ -3,11 +3,10 @@ name: CI/CD Pipeline
 on:
   push:
     branches:
-      - main
-      - develop
+      - master
   pull_request:
     branches:
-      - main
+      - master
   release:
     types: [created]
 
@@ -58,7 +57,7 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
+    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     permissions:
       contents: read
       packages: write
@@ -100,7 +99,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     environment:
       name: production
       url: https://${{ env.SERVER_HOST }}
@@ -121,7 +120,7 @@ jobs:
           script: |
             set -e
             cd ${{ env.DEPLOY_PATH }}
-            git pull origin main
+            git pull origin master
             export DOCKER_IMAGE_TAG=${{ github.sha }}
             docker-compose pull
             docker-compose up -d --remove-orphans
