@@ -103,9 +103,10 @@ jobs:
     if: github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     environment:
       name: production
-      url: https://${{ secrets.SERVER_HOST }}
+      url: https://${{ env.SERVER_HOST }}
     env:
       DEPLOY_PATH: /home/${{ secrets.SERVER_USER }}/mortgage-agent
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -113,7 +114,7 @@ jobs:
       - name: Deploy to server
         uses: appleboy/ssh-action@master
         with:
-          host: ${{ secrets.SERVER_HOST }}
+          host: ${{ env.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
@@ -130,7 +131,7 @@ jobs:
       - name: Verify deployment
         run: |
           sleep 20 # Wait for services to start
-          curl -f https://${{ secrets.SERVER_HOST }}/health
+          curl -f https://${{ env.SERVER_HOST }}/health
 
       - name: Post-deployment notification
         if: always() && github.event.pull_request
