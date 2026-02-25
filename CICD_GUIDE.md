@@ -1,18 +1,18 @@
-# CI/CD 部署文档
+# CI/CD 部署指南
 
 ## 📋 概述
 
-本文档介绍如何使用 GitHub Actions + Docker 实现自动化 CI/CD，将应用部署到你的服务器。
+本文档为你介绍了如何利用 **GitHub Actions** 和 **Docker** 实现自动化 CI/CD，从而将你的应用高效、可靠地部署到服务器。
 
 ### 核心特性
 
-- ✅ **自动化测试** - 每次提交自动运行单元测试
-- ✅ **代码质量检查** - 使用 Black, isort, Flake8 检查代码规范
-- ✅ **Docker 容器化** - 多阶段构建，镜像精简
-- ✅ **自动部署** - 推送到 main 分支自动部署到生产环境
-- ✅ **Nginx 反向代理** - HTTPS 支持、负载均衡、缓存加速
-- ✅ **零停机部署** - Docker Compose 滚动更新
-- ✅ **日志管理** - 结构化日志、容器日志卷挂载
+- ✅ **自动化测试**：每次代码提交都会自动运行单元测试，确保代码质量。
+- ✅ **代码质量检查**：通过 Black、isort 和 Flake8 等工具，自动执行代码规范检查。
+- ✅ **Docker 容器化**：采用多阶段构建技术，有效减小 Docker 镜像的体积。
+- ✅ **自动部署**：代码推送到 `main` 分支后，将自动部署到生产环境。
+- ✅ **Nginx 反向代理**：支持 HTTPS、负载均衡和缓存，提升应用性能和安全性。
+- ✅ **零停机部署**：借助 Docker Compose 实现滚动更新，确保服务持续可用。
+- ✅ **日志管理**：结构化的日志记录与容器日志卷挂载，便于问题排查。
 
 ---
 
@@ -20,83 +20,89 @@
 
 ### 第一步：初始化服务器
 
-在你的服务器上运行初始化脚本（需要 root 权限）：
+在你的服务器上运行 `scripts/server-init.sh` 脚本，以完成环境初始化。
 
 ```bash
-# 方法 1：本地复制脚本到服务器
-scp scripts/server-init.sh deploy@your-server:/tmp/
-ssh deploy@your-server "sudo bash /tmp/server-init.sh"
+# 方法一：通过 SSH 远程执行
+ssh your-user@your-server "curl -sSL https://raw.githubusercontent.com/your-username/your-repo/main/scripts/server-init.sh | sudo bash"
 
-# 方法 2：直接从网络运行（如果脚本托管在网上）
-ssh deploy@your-server "curl -sSL https://your-repo-raw-url/scripts/server-init.sh | sudo bash"
+# 方法二：先复制再执行
+scp scripts/server-init.sh your-user@your-server:/tmp/
+ssh your-user@your-server "sudo bash /tmp/server-init.sh"
 ```
 
-**脚本做了什么？**
-- 更新系统包
-- 安装 Docker 和 Docker Compose
-- 配置防火墙（开放 22, 80, 443 端口）
-- 创建 `deploy` 用户
-- 设置 Fail2Ban 防暴力破解
-- 创建应用目录结构
-- 生成自签名证书（开发用）
+**此脚本将完成以下工作**：
+- 更新系统软件包。
+- 安装 Docker 和 Docker Compose。
+- 配置防火墙，开放 22、80 和 443 端口。
+- 创建一个专用的 `deploy` 用户。
+- （可选）安装并配置 Fail2Ban，以防止暴力破解。
+- 在 `/home/deploy/mortgage-agent` 创建应用目录并克隆仓库。
 
 ### 第二步：配置 GitHub Secrets
 
-在 GitHub 仓库页面：`Settings` → `Secrets and variables` → `Actions`
+为了让 GitHub Actions 能够顺利执行，你需要在 GitHub 仓库中设置以下 Secrets：
 
-添加以下 Secrets：
+前往 `Settings` → `Secrets and variables` → `Actions`，然后添加以下内容：
 
 | Secret 名称 | 说明 | 示例 |
-|-----------|------|------|
-| `DOCKER_USERNAME` | Docker Hub 用户名 | `your_dockerhub_username` |
-| `DOCKER_PASSWORD` | Docker Hub 密码或 Token | `dckr_pat_xxx` |
-| `SERVER_USER` | 服务器用户名 | `deploy` |
-| `SERVER_HOST` | 服务器 IP 或域名 | `123.45.67.89` |
-| `SERVER_PORT` | SSH 端口 | `22` |
-| `SERVER_PRIVATE_KEY` | SSH 私钥内容 | 见下面的说明 |
+|--------------------|--------------------------------|--------------------------------|
+| `DOCKER_USERNAME` | 你的 Docker Hub 用户名 | `yourdockerhubusername` |
+| `DOCKER_PASSWORD` | 你的 Docker Hub 密码或 Token | `dckr_pat_xxxxxxxx` |
+| `SERVER_HOST` | 你服务器的 IP 地址或域名 | `123.45.67.89` |
+| `SERVER_USER` | 用于部署的 SSH 用户名 | `deploy` |
+| `SERVER_PORT` | 服务器的 SSH 端口 | `22` |
+| `SERVER_PRIVATE_KEY` | 用于 SSH 连接的私钥 | (见下方说明) |
 
-**生成 SSH 密钥对（如果没有）：**
+**如何生成和使用 SSH 密钥**：
 
-在本地运行：
+如果你还没有 SSH 密钥，可以在本地计算机上运行以下命令来生成：
 ```bash
-# 生成密钥对（一直回车使用默认值）
-ssh-keygen -t rsa -f ~/.ssh/id_rsa -N ""
+# 生成一个新的 SSH 密钥对
+ssh-keygen -t rsa -b 4096 -C "your_email@example.com"
 
-# 打印私钥内容（复制到 SERVER_PRIVATE_KEY secret）
-cat ~/.ssh/id_rsa
-
-# 添加公钥到服务器授权列表
-ssh-copy-id -i ~/.ssh/id_rsa.pub deploy@your-server
+# 将公钥复制到服务器，以便进行免密登录
+ssh-copy-id deploy@your-server
 ```
+生成后，`cat ~/.ssh/id_rsa` 的内容即为 `SERVER_PRIVATE_KEY` 的值。
 
 ### 第三步：配置应用环境
 
-连接到服务器配置应用环境变量：
+通过 SSH 连接到你的服务器，并配置应用所需的环境变量。
 
 ```bash
 ssh deploy@your-server
 cd ~/mortgage-agent
 
-# 复制示例配置
+# 从模板文件创建 .env 文件
 cp .env.example .env
 
-# 编辑 .env 文件
+# 编辑 .env 文件，根据你的需求修改配置
 nano .env
-# 根据实际需要修改配置项
 ```
 
-### 第四步：推送代码触发部署
+### 第四步：触发部署
+
+现在，一切准备就绪。只需将代码推送到 `main` 分支，即可触发自动部署。
 
 ```bash
-# 推送到 main 分支自动触发部署
 git push origin main
 ```
 
-在 GitHub Actions 查看部署进度：`Actions` 标签页
+你可以在 GitHub 仓库的 **Actions** 标签页中实时查看部署进度。
 
 ---
 
-## 📁 文件说明
+## 📁 文件与目录结构说明
+
+- **`.github/workflows/deploy.yml`**: 定义了 CI/CD 的完整流程，包括测试、构建和部署。
+- **`Dockerfile`**: 用于构建应用的多阶段 Docker 镜像。
+- **`docker-compose.yml`**: 编排 `mortgage-api` 和 `nginx` 等服务。
+- **`nginx.conf`**: Nginx 的配置文件，用于反向代理。
+- **`scripts/server-init.sh`**: 用于快速初始化服务器环境的脚本。
+- **`mortgage_agent/`**: 包含所有应用源代码。
+
+通过以上步骤，你已经成功搭建了一个全自动的 CI/CD 系统。现在，你可以专注于代码开发，而部署的繁琐工作将由系统自动完成。
 
 ### `.github/workflows/deploy.yml`
 GitHub Actions 工作流配置，定义 CI/CD 流程：

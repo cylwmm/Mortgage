@@ -3,7 +3,7 @@ version: '3.9'
 services:
   # 主应用服务
   mortgage-api:
-    image: ${DOCKER_USERNAME}/mortgage-agent:latest
+    image: ${DOCKER_USERNAME}/mortgage-agent:${DOCKER_IMAGE_TAG:-latest}
     container_name: mortgage-api
     restart: always
     ports:
