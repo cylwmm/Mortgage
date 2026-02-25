@@ -1,4 +1,4 @@
-# 息策 Agent（MortgageAgent）
+# 息策（Mortgage）
 
 房贷提前还款分析服务：提供 REST API 计算节省利息，生成专业 PDF，并导出还款明细 Excel/ZIP；内置 LangChain 聊天示例帮助你用大模型给出还贷建议。
 
