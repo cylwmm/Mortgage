@@ -1,0 +1,219 @@
+name: CI/CD Pipeline
+
+# 触发条件：push 到 main 分支或创建 release
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+  release:
+    types: [created]
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/mortgage-agent
+  SERVER_USER: ${{ secrets.SERVER_USER }}
+  SERVER_HOST: ${{ secrets.SERVER_HOST }}
+  SERVER_PORT: ${{ secrets.SERVER_PORT }}
+  DEPLOY_PATH: /home/${{ secrets.SERVER_USER }}/mortgage-agent
+
+jobs:
+  # 阶段 1: 测试和代码质量检查
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov flake8 black isort
+
+      - name: 代码格式检查 (Black)
+        run: black --check mortgage_agent/
+
+      - name: Import 排序检查 (isort)
+        run: isort --check-only mortgage_agent/
+
+      - name: 代码质量检查 (Flake8)
+        run: flake8 mortgage_agent/ --max-line-length=120 --extend-ignore=E203
+
+      - name: 运行单元测试
+        run: |
+          pytest --cov=mortgage_agent --cov-report=xml --cov-report=html
+
+      - name: 上传测试覆盖报告
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
+
+  # 阶段 2: 构建和推送 Docker 镜像
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    # 仅在 push main/develop 或 release 时构建
+    if: |
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: 提取版本信息
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 阶段 3: 部署到服务器（仅在 main 分支）
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+
+    environment:
+      name: production
+      url: https://${{ secrets.SERVER_HOST }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 配置 SSH 密钥
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SERVER_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.SERVER_HOST }} >> ~/.ssh/known_hosts
+
+      - name: 创建部署脚本
+        run: |
+          cat > /tmp/deploy.sh << 'EOF'
+          #!/bin/bash
+          set -e
+          
+          DEPLOY_PATH="${{ env.DEPLOY_PATH }}"
+          SERVER_USER="${{ env.SERVER_USER }}"
+          IMAGE_NAME="${{ env.IMAGE_NAME }}"
+          TAG="${{ github.sha }}"
+          
+          echo "=== 开始部署 ==="
+          echo "部署路径: $DEPLOY_PATH"
+          
+          # 连接到服务器并执行部署
+          ssh -p ${{ env.SERVER_PORT }} ${{ env.SERVER_USER }}@${{ env.SERVER_HOST }} << 'SSHEOF'
+          set -e
+          
+          # 创建部署目录
+          mkdir -p $DEPLOY_PATH
+          cd $DEPLOY_PATH
+          
+          # 拉取最新代码
+          if [ -d ".git" ]; then
+            git fetch origin
+            git checkout main
+            git pull origin main
+          else
+            git clone https://github.com/${{ github.repository }}.git .
+          fi
+          
+          # 停止旧容器
+          docker-compose down || true
+          
+          # 更新环境变量文件（需要手动配置 .env 文件）
+          # cp .env.example .env
+          # 编辑 .env 文件...
+          
+          # 构建/拉取镜像并启动
+          docker-compose up -d
+          
+          # 检查服务健康状态
+          sleep 5
+          curl -f http://localhost:8000/health || exit 1
+          
+          echo "✓ 部署成功！"
+          SSHEOF
+          EOF
+          
+          chmod +x /tmp/deploy.sh
+
+      - name: 执行远程部署
+        run: bash /tmp/deploy.sh
+
+      - name: 验证部署
+        run: |
+          max_attempts=30
+          attempt=0
+          while [ $attempt -lt $max_attempts ]; do
+            if curl -f http://${{ secrets.SERVER_HOST }}/health > /dev/null 2>&1; then
+              echo "✓ 服务已启动"
+              exit 0
+            fi
+            echo "等待服务启动... ($(( attempt + 1 ))/$max_attempts)"
+            sleep 10
+            ((attempt++))
+          done
+          echo "✗ 服务启动失败"
+          exit 1
+
+      - name: 部署通知
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const status = '${{ job.status }}' === 'success' ? '✓ 成功' : '✗ 失败';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 部署状态: ${status}\n\n生产环境: https://${{ secrets.SERVER_HOST }}`
+            })
+
