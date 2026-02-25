@@ -13,8 +13,7 @@ on:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/mortgage-agent
-  DEPLOY_PATH: /home/${{ secrets.SERVER_USER }}/mortgage-agent
+  # IMAGE_NAME and DEPLOY_PATH are moved to job-level envs because top-level env cannot access secrets.
 
 jobs:
   test:
@@ -63,7 +62,8 @@ jobs:
     permissions:
       contents: read
       packages: write
-
+    env:
+      IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/mortgage-agent
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -104,7 +104,8 @@ jobs:
     environment:
       name: production
       url: https://${{ secrets.SERVER_HOST }}
-
+    env:
+      DEPLOY_PATH: /home/${{ secrets.SERVER_USER }}/mortgage-agent
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
