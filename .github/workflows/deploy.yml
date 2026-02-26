@@ -149,8 +149,18 @@ jobs:
           key: ${{ secrets.SERVER_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT }}
           script: |
-            sleep 40
-            curl -f http://127.0.0.1:8000/health
+            set -e
+            for i in $(seq 1 6); do
+              echo "[healthcheck] attempt $i"
+              docker-compose -f "${{ env.DEPLOY_PATH }}/docker-compose.yml" ps
+              if curl -f http://127.0.0.1:8000/health; then
+                exit 0
+              fi
+              docker-compose -f "${{ env.DEPLOY_PATH }}/docker-compose.yml" logs --tail 50 || true
+              sleep 10
+            done
+            echo "healthcheck failed after retries"
+            exit 1
 
       - name: Post-deployment notification
         if: always() && github.event.pull_request
