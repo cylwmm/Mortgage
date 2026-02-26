@@ -310,7 +310,6 @@ def simulate(params: LoanParams, prepayment: Prepayment) -> SimulationResult:
             critical_reason=None,
         )
 
-    # 提前还款金额不可超过剩余本金
     prepay_amount = min(prepayment.amount, remaining_principal)
     new_principal = max(remaining_principal - prepay_amount, 0.0)
 
