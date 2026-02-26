@@ -119,12 +119,19 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           script: |
             set -e
-            cd ${{ env.DEPLOY_PATH }}
-            git pull origin master
+            REPO_URL="git@github.com:${{ github.repository }}.git"
+            if [ ! -d "${{ env.DEPLOY_PATH }}/.git" ]; then
+              rm -rf "${{ env.DEPLOY_PATH }}"
+              git clone "$REPO_URL" "${{ env.DEPLOY_PATH }}"
+            else
+              cd "${{ env.DEPLOY_PATH }}"
+              git fetch origin
+              git reset --hard origin/master
+            fi
+            cd "${{ env.DEPLOY_PATH }}"
             export DOCKER_IMAGE_TAG=${{ github.sha }}
             docker-compose pull
             docker-compose up -d --remove-orphans
-            
             echo "🚀 Deployment successful!"
 
       - name: Verify deployment
