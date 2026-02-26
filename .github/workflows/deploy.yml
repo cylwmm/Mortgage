@@ -142,9 +142,15 @@ jobs:
             echo "🚀 Deployment successful!"
 
       - name: Verify deployment
-        run: |
-          sleep 20 # Wait for services to start
-          curl -f https://${{ env.SERVER_HOST }}/health
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ env.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            sleep 40
+            curl -f http://127.0.0.1:8000/health
 
       - name: Post-deployment notification
         if: always() && github.event.pull_request
