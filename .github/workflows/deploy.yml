@@ -136,6 +136,8 @@ jobs:
               git reset --hard origin/master
             fi
             cd "${{ env.DEPLOY_PATH }}"
+            mkdir -p output logs
+            chown -R 1000:1000 output logs
             export DOCKER_IMAGE_TAG=${{ github.sha }}
             docker-compose pull
             docker-compose up -d --remove-orphans
