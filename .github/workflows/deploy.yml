@@ -119,6 +119,9 @@ jobs:
           port: ${{ secrets.SERVER_PORT }}
           script: |
             set -e
+            mkdir -p ~/.ssh
+            ssh-keyscan github.com >> ~/.ssh/known_hosts
+            chmod 600 ~/.ssh/known_hosts
             REPO_URL="git@github.com:${{ github.repository }}.git"
             if [ ! -d "${{ env.DEPLOY_PATH }}/.git" ]; then
               rm -rf "${{ env.DEPLOY_PATH }}"
@@ -151,4 +154,3 @@ jobs:
               repo: context.repo.repo,
               body: `## Production Deployment: ${status}\n\n[View Deployment](${{ job.environment.url }})`
             });
-
