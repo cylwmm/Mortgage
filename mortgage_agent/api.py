@@ -88,7 +88,6 @@ def export_zip(body: LoanRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    # 生成 PDF 报告并写入 ZIP
     pdf_path = generate_pdf(
         result=result,
         prepayment=prepay,
