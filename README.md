@@ -10,6 +10,7 @@
 - **提前还款分析**：计算并对比“缩短年限”和“降低月供”两种方案下的利息节省情况。
 - **专业 PDF 报告**：一键生成包含核心摘要、方案对比、理财 vs. 还贷建议的 PDF 报告。
 - **Excel 明细导出**：导出包含原方案和新方案还款明细的 ZIP 包，组合贷导出自动按商贷/公积金动态列并区分配色（蓝色=商贷、绿色=公积金）。
+- **定投式还款测算**：在原月供基础上每月固定追加还款，计算提前结清时间与节省的利息。 
 - **安全与限流**：内置参数校验、行数/文件大小上限与基于 IP 的速率限制，支持可选 API Key 保护，抵御滥用请求。
 - **RESTful API**：提供标准化的 API 接口，易于集成。
 - **容器化部署**：通过 Docker 和 Docker Compose 实现快速、一致的部署。
@@ -146,7 +147,7 @@ git push origin main
 ## 📂 API 接口说明
 
 ### 验证与限流
-- 请求参数：本金 ≤ `MAX_PRINCIPAL`（默认 3000 万），年利率 ≤ `MAX_ANNUAL_RATE`（默认 30%），期限 ≤ `MAX_TERM_MONTHS`（默认 600 期），提前还款额 ≤ 本金×`MAX_PREPAY_RATIO`（默认 1.0）。
+- 请求参数：本金 ≤ `MAX_PRINCIPAL`（默认 3000 万），年利率 ≤ `MAX_ANNUAL_RATE`（默认 30%），期限 ≤ `MAX_TERM_MONTHS`（默认 600 期），提前还款额/定投额 ≤ 本金×`MAX_PREPAY_RATIO`（默认 1.0）。
 - 组合贷：`fund_principal` 与 `commercial_principal` 不能同时为 0，任一为 0 则不生成对应贷款列。
 - 导出保护：单份计划最大行数 `MAX_SCHEDULE_ROWS`（默认 2000），导出 ZIP 体积 `MAX_EXPORT_BYTES`（默认 6 MiB）超限返回 `413`。
 - 速率限制：普通接口默认 `RATE_LIMIT_DEFAULT`（默认 60/min），导出接口 `RATE_LIMIT_EXPORT`（默认 15/min）；超限返回 `429`。限流会优先读取 `X-Forwarded-For` / `X-Real-IP` 头（由反向代理写入），缺省回退到远端地址。
@@ -162,6 +163,27 @@ git push origin main
 - `prepay_amount`: 本次提前还款金额 (元)
 - `invest_annual_rate`: (可选) 你的投资理财年化收益率 (%)
 
+### 请求体 (`RecurringInvestmentRequest`)
+- `principal`: 贷款本金 (元)
+- `annual_rate`: 年利率 (%)
+- `term_months`: 贷款总期数 (月)
+- `method`: 还款方式 (`equal_payment` 或 `equal_principal`)
+- `paid_periods`: 已还期数；如不传可结合 `first_payment_date` 估算
+- `first_payment_date`: 首次还款日期，用于推算已还期数（可选）
+- `recurring_extra_amount`: 每月固定追加还款额 (元)
+- `recurring_day`: (可选) 每月定投日(1-28)，仅作提示，不影响计算
+
+### 请求体 (`AnnualRecurringRequest`)
+- `principal`: 贷款本金 (元)
+- `annual_rate`: 年利率 (%)
+- `term_months`: 贷款总期数 (月)
+- `method`: 还款方式 (`equal_payment` 或 `equal_principal`)
+- `paid_periods`: 已还期数；如不传可结合 `first_payment_date` + `as_of_date` 估算
+- `first_payment_date`: 首次还款日期（可选）
+- `as_of_date`: 测算日期/本次还款日（可选）
+- `annual_extra_amount`: 每年固定追加还款额 (元)
+- `recurring_start_date`: 首次年度定投日期（例如 2022-12-29）；之后每年同日定投
+
 ### 主要接口
 
 - `POST /v1/mortgages/prepayment:calc`:
@@ -175,7 +197,21 @@ git push origin main
 - `POST /v1/mortgages/combined:export-xlsx`:
   **功能**: 组合贷（公积金+商贷）计算并导出 Excel（ZIP 打包），响应头 `X-Total-Interest` 返回总利息。
   **请求体**: `fund_principal`, `fund_annual_rate`, `commercial_principal`, `commercial_annual_rate`, `term_months`, `method`；当 `fund_principal` 或 `commercial_principal` 为 0 时，对应贷款列将被自动隐藏。
-  **响应**: ZIP 文件流，内含 `房贷月供明细.xlsx`，列顺序为 “期数 / 月供总额 /（商贷列）/（公积金列）/ 利息总占比”；商贷与公积金列使用不同配色。
+  **响应**: ZIP 文件流，内含 `房贷月供明细.xlsx`，仅在有对应贷款时展示商贷/公积金列，并用不同底色区分。
+
+- `POST /v1/mortgages/recurring:calc`:
+  **功能**: 定投式还款测算——在原月供基础上追加固定金额，计算提前结清所需期数、总利息以及相较基准方案节省的利息。
+  **响应**: JSON，包含 `months_to_payoff`, `total_interest_with_recurring`, `base_remaining_interest`, `interest_savings_vs_base`, `total_payment_with_recurring`, `base_monthly_payment`, `recurring_extra_amount`。
+
+- `POST /v1/mortgages/recurring:calc-scheduled`:
+  **功能**: 指定测算日期与定投开始日期的定投式还款，可选按月或按年固定日期追加，计算多久还清、总利息与节省利息，并返回预计结清日期。
+  **请求体**: `principal`, `annual_rate`, `term_months`, `method`, `paid_periods`(可选)、`first_payment_date`(可选)、`as_of_date`(测算日)、`recurring_extra_amount`, `recurring_day`(可选提示)、`recurring_start_date`(可选，默认从 `as_of_date` 生效)，`frequency`(`monthly`/`annual`)，若 `annual` 需提供 `annual_month`, `annual_day`。
+  **响应**: JSON，包含 `months_to_payoff`, `payoff_date`, `total_interest_with_recurring`, `interest_savings_vs_base`, `base_remaining_interest`, `total_payment_with_recurring`, `base_monthly_payment`, `recurring_extra_amount`, `start_offset_months`, `first_annual_extra_date`。
+
+- `POST /v1/mortgages/recurring:annual`:
+  **功能**: 年定投专用接口，仅使用年度参数（从首年定投日期开始，每年同日追加）。
+  **请求体**: `principal`, `annual_rate`, `term_months`, `method`, `paid_periods`(可选)、`first_payment_date`(可选)、`as_of_date`(可选)、`annual_extra_amount`, `recurring_start_date`。
+  **响应**: JSON，包含 `months_to_payoff`, `payoff_date`, `total_interest_with_recurring`, `base_total_interest`, `interest_savings_vs_base`, `base_remaining_interest`, `total_payment_with_recurring`, `base_monthly_payment`, `annual_extra_amount`, `start_offset_months`, `first_annual_extra_date`。
 
 **cURL 示例:**
 ```bash
@@ -211,6 +247,70 @@ curl -X POST "http://127.0.0.1:8000/v1/mortgages/combined:export-xlsx" \
   }'
 ```
 `headers_combined.txt` 会包含 `X-Total-Interest`，下载的 ZIP 内含 `房贷月供明细.xlsx`，仅在有对应贷款时展示商贷/公积金列，并用不同底色区分。
+
+**cURL 示例（定投式还款测算）:**
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:calc" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "principal": 1000000,
+    "annual_rate": 3.5,
+    "term_months": 360,
+    "method": "equal_payment",
+    "paid_periods": 24,
+    "recurring_extra_amount": 2000
+  }'
+```
+
+**cURL 示例: 定投式还款（指定测算日 & 定投起始日）**
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:calc-scheduled" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "principal": 1000000,
+    "annual_rate": 3.5,
+    "term_months": 360,
+    "method": "equal_payment",
+    "as_of_date": "2024-01-15",
+    "first_payment_date": "2022-01-15",
+    "recurring_extra_amount": 2000,
+    "recurring_start_date": "2024-03-15"
+  }'
+```
+
+**cURL 示例: 每年固定日期追加（12-30 还 50000 元）**
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:calc-scheduled" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "principal": 1000000,
+    "annual_rate": 3.5,
+    "term_months": 360,
+    "method": "equal_payment",
+    "as_of_date": "2024-02-15",
+    "first_payment_date": "2022-01-15",
+    "frequency": "annual",
+    "annual_month": 12,
+    "annual_day": 30,
+    "recurring_extra_amount": 50000
+  }'
+```
+
+**cURL 示例: 年定投专用接口（从 2022-12-29 开始每年还 50000 元）**
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:annual" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "principal": 1000000,
+    "annual_rate": 3.5,
+    "term_months": 360,
+    "method": "equal_payment",
+    "first_payment_date": "2021-10-01",
+    "as_of_date": "2021-10-01",
+    "annual_extra_amount": 50000,
+    "recurring_start_date": "2022-12-29"
+  }'
+```
 
 **cURL 示例 (开启 API Key)**
 ```bash

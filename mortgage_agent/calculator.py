@@ -115,6 +115,23 @@ class SimulationResult:
     critical_reason: Optional[str]
 
 
+@dataclass
+class RecurringExtraResult:
+    paid_periods: int
+    remaining_months: int
+    months_with_recurring: int
+    base_remaining_interest: float
+    base_total_interest: float
+    total_interest_with_recurring: float
+    recurring_interest: float
+    interest_savings: float
+    total_payment_with_recurring: float
+    base_monthly_payment: float
+    recurring_extra_payment: float
+    schedule_with_recurring: List[ScheduleRow]
+    base_schedule: List[ScheduleRow]
+
+
 def monthly_rate(annual_rate: float) -> float:
     # 年利率百分比 -> 月利率小数。例如 3.6% => 0.003
     return annual_rate / 100.0 / 12.0
@@ -213,6 +230,69 @@ def build_fixed_payment_schedule(
     return rows
 
 
+def build_recurring_extra_schedule(
+    principal: float,
+    rate: float,
+    base_payment: float,
+    extra_payment: float,
+    max_months: int,
+    extra_start_offset: int = 0,
+) -> List[ScheduleRow]:
+    # 在原月供基础上追加固定“定投”金额，直至还清。
+    rows: List[ScheduleRow] = []
+    balance = principal
+    if principal <= 0 or (base_payment + extra_payment) <= 0:
+        return rows
+
+    for i in range(1, max_months + 1):
+        interest = balance * rate
+        extra = extra_payment if i > extra_start_offset else 0.0
+        payment = base_payment + extra
+        principal_payment = payment - interest
+        if principal_payment <= 0:
+            # 定投金额与月供之和不足覆盖利息，无法摊还
+            raise ValueError("recurring payment too low to reduce principal")
+
+        principal_payment = min(principal_payment, balance)
+        payment_effective = principal_payment + interest
+        balance -= principal_payment
+        rows.append(ScheduleRow(i, payment_effective, principal_payment, interest, balance))
+        if balance <= 0:
+            break
+    return rows
+
+
+def build_annual_recurring_schedule(
+    principal: float,
+    rate: float,
+    base_payment: float,
+    extra_payment: float,
+    max_months: int,
+    first_extra_offset: int = 0,
+) -> List[ScheduleRow]:
+    # 按年追加固定“定投”金额：从第 first_extra_offset+1 期开始，每 12 期追加一次。
+    rows: List[ScheduleRow] = []
+    balance = principal
+    if principal <= 0 or base_payment <= 0:
+        return rows
+
+    for i in range(1, max_months + 1):
+        interest = balance * rate
+        apply_extra = i >= first_extra_offset + 1 and (i - first_extra_offset - 1) % 12 == 0
+        extra = extra_payment if apply_extra else 0.0
+        payment = base_payment + extra
+        principal_payment = payment - interest
+        if principal_payment <= 0:
+            raise ValueError("recurring payment too low to reduce principal")
+
+        principal_payment = min(principal_payment, balance)
+        balance -= principal_payment
+        rows.append(ScheduleRow(i, principal_payment + interest, principal_payment, interest, balance))
+        if balance <= 0:
+            break
+    return rows
+
+
 def aggregate_interest_by_year(schedule: List[ScheduleRow]) -> Dict[int, float]:
     # 按“贷款年度”汇总利息（第1年=1~12期，第2年=13~24期 ...）。
     totals: Dict[int, float] = {}
@@ -245,7 +325,7 @@ def find_critical_point(schedule: List[ScheduleRow]) -> Tuple[Optional[int], Opt
     return None, None
 
 
-def simulate(params: LoanParams, prepayment: Prepayment) -> SimulationResult:
+def simulate(params: LoanParams, prepayment: Prepayment, *, as_of_date: Optional[date] = None) -> SimulationResult:
     # 主流程：
     # 1) 先生成基准方案完整还款表，并切出“剩余期”部分
     # 2) 提前还款后得到 new_principal
@@ -275,7 +355,7 @@ def simulate(params: LoanParams, prepayment: Prepayment) -> SimulationResult:
 
     method = normalize_method(params.method)
     rate = monthly_rate(params.annual_rate)
-    paid_periods = compute_paid_periods(params)
+    paid_periods = compute_paid_periods(params, today=as_of_date)
 
     base_schedule_full = build_schedule(params.principal, rate, params.term_months, method)
     base_remaining = base_schedule_full[paid_periods:]
@@ -354,5 +434,156 @@ def simulate(params: LoanParams, prepayment: Prepayment) -> SimulationResult:
         interest_by_year=interest_by_year,
         critical_month_index=critical_month_index,
         critical_reason=critical_reason,
+    )
+
+
+def simulate_recurring_extra(params: LoanParams, recurring_extra: float, *, as_of_date: Optional[date] = None, start_offset_months: int = 0) -> RecurringExtraResult:
+    # 定投式提前还款：在原月供基础上追加固定金额，计算提早还清所需期数与节省利息。
+    if recurring_extra <= 0:
+        raise ValueError("recurring_extra must be greater than 0")
+    if start_offset_months < 0:
+        raise ValueError("start_offset_months cannot be negative")
+
+    method = normalize_method(params.method)
+    rate = monthly_rate(params.annual_rate)
+    paid_periods = compute_paid_periods(params, today=as_of_date)
+
+    base_schedule_full = build_schedule(params.principal, rate, params.term_months, method)
+    base_remaining = base_schedule_full[paid_periods:]
+    remaining_months = len(base_remaining)
+    base_total_interest = sum(row.interest for row in base_schedule_full)
+    base_paid_interest = sum(row.interest for row in base_schedule_full[:paid_periods])
+    base_paid_payment = sum(row.payment for row in base_schedule_full[:paid_periods])
+
+    if paid_periods <= 0:
+        remaining_principal = params.principal
+    else:
+        remaining_principal = base_schedule_full[paid_periods - 1].balance if base_schedule_full else 0.0
+
+    if remaining_months == 0 or remaining_principal <= 0:
+        total_interest_with_recurring = base_paid_interest
+        return RecurringExtraResult(
+            paid_periods=paid_periods,
+            remaining_months=0,
+            months_with_recurring=0,
+            base_remaining_interest=0.0,
+            base_total_interest=base_total_interest,
+            total_interest_with_recurring=total_interest_with_recurring,
+            recurring_interest=0.0,
+            interest_savings=base_total_interest - total_interest_with_recurring,
+            total_payment_with_recurring=base_paid_payment,
+            base_monthly_payment=0.0,
+            recurring_extra_payment=recurring_extra,
+            schedule_with_recurring=[],
+            base_schedule=[],
+        )
+
+    base_monthly_payment = base_remaining[0].payment if base_remaining else 0.0
+    schedule_with_recurring = build_recurring_extra_schedule(
+        remaining_principal,
+        rate,
+        base_monthly_payment,
+        recurring_extra,
+        max_months=max(remaining_months, 1) * 2,
+        extra_start_offset=start_offset_months,
+    )
+
+    base_remaining_interest = sum(row.interest for row in base_remaining)
+    recurring_interest = sum(row.interest for row in schedule_with_recurring)
+    total_interest_with_recurring = base_paid_interest + recurring_interest
+    interest_savings = base_total_interest - total_interest_with_recurring
+    total_payment_with_recurring = base_paid_payment + sum(row.payment for row in schedule_with_recurring)
+
+    return RecurringExtraResult(
+        paid_periods=paid_periods,
+        remaining_months=remaining_months,
+        months_with_recurring=len(schedule_with_recurring),
+        base_remaining_interest=base_remaining_interest,
+        base_total_interest=base_total_interest,
+        total_interest_with_recurring=total_interest_with_recurring,
+        recurring_interest=recurring_interest,
+        interest_savings=interest_savings,
+        total_payment_with_recurring=total_payment_with_recurring,
+        base_monthly_payment=base_monthly_payment,
+        recurring_extra_payment=recurring_extra,
+        schedule_with_recurring=schedule_with_recurring,
+        base_schedule=base_remaining,
+    )
+
+
+def simulate_annual_recurring_extra(
+    params: LoanParams,
+    annual_extra: float,
+    *,
+    as_of_date: Optional[date] = None,
+    months_until_first_extra: int = 0,
+) -> RecurringExtraResult:
+    # 年度定投式提前还款：每年固定月份/日期追加一次额外还款。
+    if annual_extra <= 0:
+        raise ValueError("annual_extra must be greater than 0")
+    if months_until_first_extra < 0:
+        raise ValueError("months_until_first_extra cannot be negative")
+
+    method = normalize_method(params.method)
+    rate = monthly_rate(params.annual_rate)
+    paid_periods = compute_paid_periods(params, today=as_of_date)
+
+    base_schedule_full = build_schedule(params.principal, rate, params.term_months, method)
+    base_remaining = base_schedule_full[paid_periods:]
+    remaining_months = len(base_remaining)
+    base_total_interest = sum(row.interest for row in base_schedule_full)
+    base_paid_interest = sum(row.interest for row in base_schedule_full[:paid_periods])
+    base_paid_payment = sum(row.payment for row in base_schedule_full[:paid_periods])
+
+    remaining_principal = params.principal if paid_periods <= 0 else (base_schedule_full[paid_periods - 1].balance if base_schedule_full else 0.0)
+
+    if remaining_months == 0 or remaining_principal <= 0:
+        total_interest_with_recurring = base_paid_interest
+        return RecurringExtraResult(
+            paid_periods=paid_periods,
+            remaining_months=0,
+            months_with_recurring=0,
+            base_remaining_interest=0.0,
+            base_total_interest=base_total_interest,
+            total_interest_with_recurring=total_interest_with_recurring,
+            recurring_interest=0.0,
+            interest_savings=base_total_interest - total_interest_with_recurring,
+            total_payment_with_recurring=base_paid_payment,
+            base_monthly_payment=0.0,
+            recurring_extra_payment=annual_extra,
+            schedule_with_recurring=[],
+            base_schedule=[],
+        )
+
+    base_monthly_payment = base_remaining[0].payment if base_remaining else 0.0
+    schedule_with_recurring = build_annual_recurring_schedule(
+        remaining_principal,
+        rate,
+        base_monthly_payment,
+        annual_extra,
+        max_months=max(remaining_months, 1) * 3,
+        first_extra_offset=months_until_first_extra,
+    )
+
+    base_remaining_interest = sum(row.interest for row in base_remaining)
+    recurring_interest = sum(row.interest for row in schedule_with_recurring)
+    total_interest_with_recurring = base_paid_interest + recurring_interest
+    interest_savings = base_total_interest - total_interest_with_recurring
+    total_payment_with_recurring = base_paid_payment + sum(row.payment for row in schedule_with_recurring)
+
+    return RecurringExtraResult(
+        paid_periods=paid_periods,
+        remaining_months=remaining_months,
+        months_with_recurring=len(schedule_with_recurring),
+        base_remaining_interest=base_remaining_interest,
+        base_total_interest=base_total_interest,
+        total_interest_with_recurring=total_interest_with_recurring,
+        recurring_interest=recurring_interest,
+        interest_savings=interest_savings,
+        total_payment_with_recurring=total_payment_with_recurring,
+        base_monthly_payment=base_monthly_payment,
+        recurring_extra_payment=annual_extra,
+        schedule_with_recurring=schedule_with_recurring,
+        base_schedule=base_remaining,
     )
 
