@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import date
 from io import BytesIO
 from typing import Optional
@@ -9,26 +10,72 @@ from urllib.parse import quote
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field, field_validator, model_validator
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
 from mortgage_agent.calculator import LoanParams, Prepayment, ScheduleRow, build_schedule, monthly_rate, normalize_method, simulate
 from mortgage_agent.report import generate_pdf
 
+
+API_KEY = os.getenv("API_KEY")
+
+DEFAULT_RATE_LIMIT = os.getenv("RATE_LIMIT_DEFAULT", "60/minute")
+EXPORT_RATE_LIMIT = os.getenv("RATE_LIMIT_EXPORT", "15/minute")
+MAX_TERM_MONTHS = int(os.getenv("MAX_TERM_MONTHS", "600"))
+MAX_PRINCIPAL = float(os.getenv("MAX_PRINCIPAL", "30000000"))
+MAX_ANNUAL_RATE = float(os.getenv("MAX_ANNUAL_RATE", "30"))
+MAX_PREPAY_RATIO = float(os.getenv("MAX_PREPAY_RATIO", "1.0"))
+MAX_SCHEDULE_ROWS = int(os.getenv("MAX_SCHEDULE_ROWS", "2000"))
+MAX_EXPORT_BYTES = int(os.getenv("MAX_EXPORT_BYTES", str(6 * 1024 * 1024)))
+ALLOWED_METHODS = {"equal_payment", "equal_principal"}
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        candidate = forwarded.split(",")[0].strip()
+        if candidate:
+            return candidate
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=_client_ip, default_limits=[DEFAULT_RATE_LIMIT])
 
 app = FastAPI(
     title="息策 Agent",
     description="不只是计算器，是帮你省下一辆车的房贷管家。",
     version="0.1.0",
 )
+app.state.limiter = limiter
+app.add_middleware(SlowAPIMiddleware)
+
+
+def require_api_key(request: Request):
+    if not API_KEY:
+        return
+    provided = request.headers.get("x-api-key")
+    if not provided or provided != API_KEY:
+        raise HTTPException(status_code=401, detail="invalid or missing api key")
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
 
 class LoanRequest(BaseModel):
     # 基础贷款信息
-    principal: float = Field(..., gt=0, description="贷款总额/本金（元）")
-    annual_rate: float = Field(..., ge=0, description="年利率百分比，例如 3.5")
-    term_months: int = Field(..., gt=0, description="贷款总期数（月），例如 360")
+    principal: float = Field(..., gt=0, le=MAX_PRINCIPAL, description="贷款总额/本金（元）")
+    annual_rate: float = Field(..., ge=0, le=MAX_ANNUAL_RATE, description="年利率百分比，例如 3.5")
+    term_months: int = Field(..., gt=0, le=MAX_TERM_MONTHS, description="贷款总期数（月），例如 360")
     method: str = Field(..., description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
 
     # 已还信息（二选一：paid_periods 或 first_payment_date）
@@ -39,7 +86,22 @@ class LoanRequest(BaseModel):
     prepay_amount: float = Field(..., ge=0, description="本次计划提前还款金额（元）")
 
     # 可选参数
-    invest_annual_rate: Optional[float] = Field(None, ge=0, description="可选：理财年化收益率百分比")
+    invest_annual_rate: Optional[float] = Field(None, ge=0, le=MAX_ANNUAL_RATE, description="可选：理财年化收益率百分比")
+
+    @field_validator("method")
+    @classmethod
+    def _validate_method(cls, value: str) -> str:
+        if value not in ALLOWED_METHODS:
+            raise ValueError(f"method must be one of {sorted(ALLOWED_METHODS)}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_ranges(self) -> "LoanRequest":
+        if self.paid_periods and self.paid_periods > self.term_months:
+            raise ValueError("paid_periods cannot exceed term_months")
+        if self.prepay_amount > self.principal * MAX_PREPAY_RATIO:
+            raise ValueError("prepay_amount exceeds allowed ratio of principal")
+        return self
 
 
 class CalcResponse(BaseModel):
@@ -49,15 +111,33 @@ class CalcResponse(BaseModel):
 
 
 class CombinedLoanRequest(BaseModel):
-    fund_principal: float = Field(..., ge=0, description="公积金贷款本金（元）；0 表示无公积金贷款")
-    fund_annual_rate: float = Field(..., ge=0, description="公积金贷款年利率（%）")
-    commercial_principal: float = Field(..., ge=0, description="商业贷款本金（元）；0 表示无商业贷款")
-    commercial_annual_rate: float = Field(..., ge=0, description="商业贷款年利率（%）")
-    term_months: int = Field(..., gt=0, description="贷款总期数（月）")
+    fund_principal: float = Field(..., ge=0, le=MAX_PRINCIPAL, description="公积金贷款本金（元）；0 表示无公积金贷款")
+    fund_annual_rate: float = Field(..., ge=0, le=MAX_ANNUAL_RATE, description="公积金贷款年利率（%）")
+    commercial_principal: float = Field(..., ge=0, le=MAX_PRINCIPAL, description="商业贷款本金（元）；0 表示无商业贷款")
+    commercial_annual_rate: float = Field(..., ge=0, le=MAX_ANNUAL_RATE, description="商业贷款年利率（%）")
+    term_months: int = Field(..., gt=0, le=MAX_TERM_MONTHS, description="贷款总期数（月）")
     method: str = Field("equal_payment", description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
+
+    @field_validator("method")
+    @classmethod
+    def _validate_method(cls, value: str) -> str:
+        if value not in ALLOWED_METHODS:
+            raise ValueError(f"method must be one of {sorted(ALLOWED_METHODS)}")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_pairs(self) -> "CombinedLoanRequest":
+        if self.fund_principal <= 0 and self.commercial_principal <= 0:
+            raise ValueError("fund_principal 与 commercial_principal 不能同时为 0")
+        if self.fund_principal > 0 and self.fund_annual_rate <= 0:
+            raise ValueError("fund_annual_rate must be greater than 0 when fund_principal > 0")
+        if self.commercial_principal > 0 and self.commercial_annual_rate <= 0:
+            raise ValueError("commercial_annual_rate must be greater than 0 when commercial_principal > 0")
+        return self
 
 
 @app.get("/health", tags=["health"])
+@limiter.exempt
 def health() -> dict:
     return {"status": "ok"}
 
@@ -67,7 +147,8 @@ def health() -> dict:
     tags=["mortgage"],
     responses={400: {"description": "Invalid loan or prepayment parameters"}},
 )
-def calc_prepayment(body: LoanRequest) -> CalcResponse:
+@limiter.limit(DEFAULT_RATE_LIMIT)
+def calc_prepayment(request: Request, body: LoanRequest, _=Depends(require_api_key)) -> CalcResponse:
     try:
         params = LoanParams(
             principal=body.principal,
@@ -92,7 +173,8 @@ def calc_prepayment(body: LoanRequest) -> CalcResponse:
     tags=["mortgage"],
     responses={400: {"description": "Invalid loan or prepayment parameters"}},
 )
-def export_zip(body: LoanRequest):
+@limiter.limit(EXPORT_RATE_LIMIT)
+def export_zip(request: Request, body: LoanRequest, _=Depends(require_api_key)):
     """导出还款明细 ZIP（原方案/减少月供/缩短年限，各一份 Excel）。"""
     try:
         params = LoanParams(
@@ -107,6 +189,10 @@ def export_zip(body: LoanRequest):
         result = simulate(params, prepay)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    _ensure_row_limit(len(result.base_schedule), "base_schedule")
+    _ensure_row_limit(len(result.reduced_schedule), "reduced_schedule")
+    _ensure_row_limit(len(result.shorten_schedule), "shorten_schedule")
 
     pdf_bytes = generate_pdf(
         result=result,
@@ -125,11 +211,14 @@ def export_zip(body: LoanRequest):
         zf.writestr("提前还款-分析报告.pdf", pdf_bytes)
     zip_buf.seek(0)
 
+    zip_bytes = zip_buf.getvalue()
+    _ensure_export_size(len(zip_bytes))
+
     return StreamingResponse(
-        zip_buf,
+        BytesIO(zip_bytes),
         media_type="application/zip",
         headers={
-            "Content-Disposition": "attachment; filename=repayment_schedules.zip",
+            "Content-Disposition": "attachment; filename=提前还款分析报告.zip",
             "X-Savings-Reduce": f"{float(result.savings_reduce):.2f}",
             "X-Savings-Shorten": f"{float(result.savings_shorten):.2f}",
         },
@@ -140,10 +229,11 @@ def export_zip(body: LoanRequest):
     tags=["mortgage"],
     responses={400: {"description": "Invalid loan parameters"}},
 )
-def export_combined_schedule(body: CombinedLoanRequest):
+@limiter.limit(EXPORT_RATE_LIMIT)
+def export_combined_schedule(request: Request, body: CombinedLoanRequest, _=Depends(require_api_key)):
     """组合贷（公积金 + 商贷）还款计划导出 Excel，响应头返回总利息。"""
-    if body.fund_principal <= 0 and body.commercial_principal <= 0:
-        raise HTTPException(status_code=400, detail="fund_principal 与 commercial_principal 不能同时为 0")
+    include_fund = body.fund_principal > 0
+    include_commercial = body.commercial_principal > 0
 
     try:
         method = normalize_method(body.method)
@@ -152,15 +242,17 @@ def export_combined_schedule(body: CombinedLoanRequest):
             monthly_rate(body.fund_annual_rate),
             body.term_months,
             method,
-        )
+        ) if include_fund else []
         commercial_schedule = build_schedule(
             body.commercial_principal,
             monthly_rate(body.commercial_annual_rate),
             body.term_months,
             method,
-        )
+        ) if include_commercial else []
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    _ensure_row_limit(max(len(fund_schedule), len(commercial_schedule)), "combined_schedule")
 
     max_len = max(len(fund_schedule), len(commercial_schedule))
     combined: list[ScheduleRow] = []
@@ -176,20 +268,18 @@ def export_combined_schedule(body: CombinedLoanRequest):
         combined.append(ScheduleRow(idx + 1, payment, principal, interest, balance))
         total_interest += interest
 
-    xlsx_bytes = _combined_schedule_to_xlsx(
+    zip_bytes = _combined_schedule_to_xlsx(
         combined,
         commercial_schedule,
         fund_schedule,
-        include_commercial=body.commercial_principal > 0,
-        include_fund=body.fund_principal > 0,
+        include_commercial=include_commercial,
+        include_fund=include_fund,
     )
-    zip_buf = BytesIO()
-    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("房贷月供明细.xlsx", xlsx_bytes)
-    zip_buf.seek(0)
+
+    _ensure_export_size(len(zip_bytes))
 
     return StreamingResponse(
-        zip_buf,
+        BytesIO(zip_bytes),
         media_type="application/zip",
         headers={
             "Content-Disposition": "attachment; filename=loan_schedules.zip; "
@@ -363,5 +453,20 @@ def _combined_schedule_to_xlsx(
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
-    return buf.getvalue()
 
+    zip_buf = BytesIO()
+    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # 将 xlsx 打包为 zip，便于前端统一处理
+        zf.writestr("房贷月供明细.xlsx", buf.getvalue())
+    zip_buf.seek(0)
+    return zip_buf.getvalue()
+
+
+def _ensure_row_limit(rows: int, label: str) -> None:
+    if rows > MAX_SCHEDULE_ROWS:
+        raise HTTPException(status_code=413, detail=f"{label} too large, exceeds {MAX_SCHEDULE_ROWS} rows limit")
+
+
+def _ensure_export_size(size_bytes: int) -> None:
+    if size_bytes > MAX_EXPORT_BYTES:
+        raise HTTPException(status_code=413, detail="export file too large")

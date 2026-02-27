@@ -20,6 +20,12 @@ services:
       # 环境变量配置
       PYTHONUNBUFFERED: "1"
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      RATE_LIMIT_DEFAULT: ${RATE_LIMIT_DEFAULT:-60/minute}
+      RATE_LIMIT_EXPORT: ${RATE_LIMIT_EXPORT:-15/minute}
+      MAX_TERM_MONTHS: ${MAX_TERM_MONTHS:-600}
+      MAX_SCHEDULE_ROWS: ${MAX_SCHEDULE_ROWS:-2000}
+      MAX_EXPORT_BYTES: ${MAX_EXPORT_BYTES:-6291456}
+      API_KEY: ${API_KEY:-}
     volumes:
       # 输出目录挂载（用于保存 PDF/ZIP 报告）
       - ./output:/app/output
