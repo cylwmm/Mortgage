@@ -5,12 +5,14 @@ from io import BytesIO
 from typing import Optional
 import zipfile
 
-import openpyxl
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from mortgage_agent.calculator import LoanParams, Prepayment, simulate
+from mortgage_agent.calculator import LoanParams, Prepayment, ScheduleRow, build_schedule, monthly_rate, normalize_method, simulate
 from mortgage_agent.report import generate_pdf
 
 
@@ -43,6 +45,15 @@ class CalcResponse(BaseModel):
     # 仅返回：缩短年限方案 & 减少月供方案的节省利息
     savings_shorten_interest: float
     savings_reduce_payment_interest: float
+
+
+class CombinedLoanRequest(BaseModel):
+    fund_principal: float = Field(..., gt=0, description="公积金贷款本金（元）")
+    fund_annual_rate: float = Field(..., ge=0, description="公积金贷款年利率（%）")
+    commercial_principal: float = Field(..., gt=0, description="商业贷款本金（元）")
+    commercial_annual_rate: float = Field(..., ge=0, description="商业贷款年利率（%）")
+    term_months: int = Field(..., gt=0, description="贷款总期数（月）")
+    method: str = Field("equal_payment", description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
 
 
 @app.get("/health", tags=["health"])
@@ -123,24 +134,74 @@ def export_zip(body: LoanRequest):
         },
     )
 
+@app.post(
+    "/v1/mortgages/combined:export-xlsx",
+    tags=["mortgage"],
+    responses={400: {"description": "Invalid loan parameters"}},
+)
+def export_combined_schedule(body: CombinedLoanRequest):
+    """组合贷（公积金 + 商贷）还款计划导出 Excel，响应头返回总利息。"""
+    try:
+        method = normalize_method(body.method)
+        fund_schedule = build_schedule(
+            body.fund_principal,
+            monthly_rate(body.fund_annual_rate),
+            body.term_months,
+            method,
+        )
+        commercial_schedule = build_schedule(
+            body.commercial_principal,
+            monthly_rate(body.commercial_annual_rate),
+            body.term_months,
+            method,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    max_len = max(len(fund_schedule), len(commercial_schedule))
+    combined: list[ScheduleRow] = []
+    total_interest = 0.0
+
+    for idx in range(max_len):
+        fund = fund_schedule[idx] if idx < len(fund_schedule) else ScheduleRow(idx + 1, 0, 0, 0, 0)
+        commercial = commercial_schedule[idx] if idx < len(commercial_schedule) else ScheduleRow(idx + 1, 0, 0, 0, 0)
+        payment = fund.payment + commercial.payment
+        principal = fund.principal + commercial.principal
+        interest = fund.interest + commercial.interest
+        balance = fund.balance + commercial.balance
+        combined.append(ScheduleRow(idx + 1, payment, principal, interest, balance))
+        total_interest += interest
+
+    xlsx_bytes = _schedule_to_xlsx(combined)
+    stream = BytesIO(xlsx_bytes)
+    stream.seek(0)
+
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            # ASCII-only filename to avoid header encoding errors
+            "Content-Disposition": "attachment; filename=combined_mortgage.xlsx",
+            "X-Total-Interest": f"{float(total_interest):.2f}",
+        },
+    )
+
 def _schedule_to_xlsx(schedule) -> bytes:
     """将还款计划列表导出为 Excel（xlsx），返回二进制。"""
-    wb = openpyxl.Workbook()
+    wb = Workbook()
     ws = wb.active
     ws.title = "Schedule"
 
     headers = ["期数", "月供", "本金", "利息", "余额", "利息占比"]
     ws.append(headers)
 
-    header_font = openpyxl.styles.Font(bold=True, name="Arial", size=11, color="FFFFFF")
-    body_font = openpyxl.styles.Font(name="Arial", size=10)
-    header_fill = openpyxl.styles.PatternFill("solid", fgColor="0F172A")
-    alt_fill = openpyxl.styles.PatternFill("solid", fgColor="F8FAFC")
-    border = openpyxl.styles.Border(
-        bottom=openpyxl.styles.Side(style="thin", color="E2E8F0")
-    )
-    align_right = openpyxl.styles.Alignment(horizontal="right")
-    align_center = openpyxl.styles.Alignment(horizontal="center")
+    header_font = Font(bold=True, name="Arial", size=11, color="FFFFFF")
+    body_font = Font(name="Arial", size=10)
+    header_fill = PatternFill("solid", fgColor="0F172A")
+    alt_fill = PatternFill("solid", fgColor="F8FAFC")
+    border = Border(bottom=Side(style="thin", color="E2E8F0"))
+    align_right = Alignment(horizontal="right")
+    align_center = Alignment(horizontal="center")
 
     for cell in ws[1]:
         cell.font = header_font
@@ -167,12 +228,12 @@ def _schedule_to_xlsx(schedule) -> bytes:
         # 利息占比<50% 标红
         ratio_cell = ws.cell(row=idx, column=6)
         if ratio < 0.5:
-            ratio_cell.font = openpyxl.styles.Font(name="Arial", size=10, color="EF4444")
+            ratio_cell.font = Font(name="Arial", size=10, color="EF4444")
 
     # 列宽
     widths = [8, 14, 14, 14, 16, 12]
     for i, w in enumerate(widths, start=1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        ws.column_dimensions[get_column_letter(i)].width = w
 
     buf = BytesIO()
     wb.save(buf)

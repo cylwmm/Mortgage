@@ -163,6 +163,11 @@ git push origin main
   **功能**: 导出包含 PDF 报告和 Excel 还款明细的 ZIP 包。
   **响应**: ZIP 文件流，响应头携带 `X-Savings-Reduce` 和 `X-Savings-Shorten`，便于前端直接展示节省金额。
 
+- `POST /v1/mortgages/combined:export-xlsx`:
+  **功能**: 组合贷（公积金+商贷）计算并导出单份 Excel 明细，响应头 `X-Total-Interest` 返回总利息。
+  **请求体**: `fund_principal`, `fund_annual_rate`, `commercial_principal`, `commercial_annual_rate`, `term_months`, `method`。
+  **响应**: Excel 文件流，包含列“期数/月供/本金/利息/余额/利息占比”。
+
 **cURL 示例:**
 ```bash
 curl -X POST "http://127.0.0.1:8000/v1/mortgages/prepayment:export-zip" \
@@ -180,6 +185,23 @@ curl -X POST "http://127.0.0.1:8000/v1/mortgages/prepayment:export-zip" \
   }'
 ```
 生成的 `headers.txt` 中会包含节省金额的响应头，ZIP 内含 3 份 Excel 与 1 份 PDF 报告。
+
+**cURL 示例（组合贷导出）:**
+```bash
+curl -X POST "http://127.0.0.1:8000/v1/mortgages/combined:export-xlsx" \
+  -H "Content-Type: application/json" \
+  -D headers_combined.txt \
+  -o combined_mortgage.xlsx \
+  -d '{
+    "fund_principal": 600000,
+    "fund_annual_rate": 3.1,
+    "commercial_principal": 400000,
+    "commercial_annual_rate": 4.2,
+    "term_months": 360,
+    "method": "equal_payment"
+  }'
+```
+`headers_combined.txt` 会包含 `X-Total-Interest`，Excel 内每期包含月供、本金、利息、余额及利息占比。
 
 ---
 
