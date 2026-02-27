@@ -136,8 +136,7 @@ jobs:
               git reset --hard origin/master
             fi
             cd "${{ env.DEPLOY_PATH }}"
-            mkdir -p output logs
-            chown -R 1000:1000 output logs
+            mkdir -p output logs logs/nginx
             export DOCKER_IMAGE_TAG=${{ github.sha }}
             docker-compose pull
             docker-compose up -d --remove-orphans
@@ -175,4 +174,3 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: `## Production Deployment: ${status}\n\n[View Deployment](${{ job.environment.url }})`
-            });
