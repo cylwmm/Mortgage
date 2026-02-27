@@ -118,8 +118,8 @@ def export_zip(body: LoanRequest):
         media_type="application/zip",
         headers={
             "Content-Disposition": "attachment; filename=repayment_schedules.zip",
-            "X-Savings-Reduce": str(float(result.savings_reduce)),
-            "X-Savings-Shorten": str(float(result.savings_shorten)),
+            "X-Savings-Reduce": f"{float(result.savings_reduce):.2f}",
+            "X-Savings-Shorten": f"{float(result.savings_shorten):.2f}",
         },
     )
 
