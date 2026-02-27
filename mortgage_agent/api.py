@@ -4,6 +4,7 @@ from datetime import date
 from io import BytesIO
 from typing import Optional
 import zipfile
+from urllib.parse import quote
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -182,15 +183,17 @@ def export_combined_schedule(body: CombinedLoanRequest):
         include_commercial=body.commercial_principal > 0,
         include_fund=body.fund_principal > 0,
     )
-    stream = BytesIO(xlsx_bytes)
-    stream.seek(0)
+    zip_buf = BytesIO()
+    with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("房贷月供明细.xlsx", xlsx_bytes)
+    zip_buf.seek(0)
 
     return StreamingResponse(
-        stream,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        zip_buf,
+        media_type="application/zip",
         headers={
-            # ASCII-only filename to avoid header encoding errors
-            "Content-Disposition": "attachment; filename=combined_mortgage.xlsx",
+            "Content-Disposition": "attachment; filename=loan_schedules.zip; "
+            f"filename*=UTF-8''{quote('房贷月供明细.zip')}",
             "X-Total-Interest": f"{float(total_interest):.2f}",
         },
     )
@@ -284,15 +287,27 @@ def _combined_schedule_to_xlsx(
 
     header_font = Font(bold=True, name="Arial", size=11, color="FFFFFF")
     body_font = Font(name="Arial", size=10)
-    header_fill = PatternFill("solid", fgColor="0F172A")
+    header_fill_base = PatternFill("solid", fgColor="0F172A")
+    header_fill_commercial = PatternFill("solid", fgColor="1D4ED8")
+    header_fill_fund = PatternFill("solid", fgColor="047857")
+    body_fill_commercial = PatternFill("solid", fgColor="EFF6FF")
+    body_fill_fund = PatternFill("solid", fgColor="ECFDF3")
     alt_fill = PatternFill("solid", fgColor="F8FAFC")
     border = Border(bottom=Side(style="thin", color="E2E8F0"))
     align_right = Alignment(horizontal="right")
     align_center = Alignment(horizontal="center")
 
-    for cell in ws[1]:
+    commercial_cols = [idx for idx, h in enumerate(headers, start=1) if h.startswith("商贷")]
+    fund_cols = [idx for idx, h in enumerate(headers, start=1) if h.startswith("公积金")]
+
+    for idx, cell in enumerate(ws[1], start=1):
         cell.font = header_font
-        cell.fill = header_fill
+        if idx in commercial_cols:
+            cell.fill = header_fill_commercial
+        elif idx in fund_cols:
+            cell.fill = header_fill_fund
+        else:
+            cell.fill = header_fill_base
         cell.alignment = align_center
 
     max_len = len(combined)
@@ -334,11 +349,14 @@ def _combined_schedule_to_xlsx(
             cell = ws.cell(row=idx + 2, column=col_idx)
             cell.font = body_font
             cell.alignment = align_right if col_idx > 1 else align_center
-            if (idx + 2) % 2 == 0:
+            if col_idx in commercial_cols:
+                cell.fill = body_fill_commercial
+            elif col_idx in fund_cols:
+                cell.fill = body_fill_fund
+            elif (idx + 2) % 2 == 0:
                 cell.fill = alt_fill
             cell.border = border
 
-    # 简单列宽设置
     for i in range(1, len(headers) + 1):
         ws.column_dimensions[get_column_letter(i)].width = 14
 
