@@ -11,7 +11,7 @@ services:
       - --port
       - "8000"
       - --workers
-      - "4"
+      - "2"
     restart: always
     ports:
       # 内部端口 8000，可通过 Nginx 反向代理访问
@@ -36,10 +36,10 @@ services:
       resources:
         limits:
           cpus: '2'
-          memory: 512M
+          memory: 1G
         reservations:
           cpus: '1'
-          memory: 256M
+          memory: 512M
     networks:
       - mortgage-network
     logging:
