@@ -107,10 +107,10 @@ def export_zip(body: LoanRequest):
 
     zip_buf = BytesIO()
     with zipfile.ZipFile(zip_buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("原方案.xlsx", _schedule_to_xlsx(result.base_schedule))
-        zf.writestr("减少月供.xlsx", _schedule_to_xlsx(result.reduced_schedule))
-        zf.writestr("缩短年限.xlsx", _schedule_to_xlsx(result.shorten_schedule))
-        zf.writestr("报告.pdf", pdf_bytes)
+        zf.writestr("原方案月供明细.xlsx", _schedule_to_xlsx(result.base_schedule))
+        zf.writestr("提前还款-减少月供-月供明细.xlsx", _schedule_to_xlsx(result.reduced_schedule))
+        zf.writestr("提前还款-缩短年限-月供明细.xlsx", _schedule_to_xlsx(result.shorten_schedule))
+        zf.writestr("提前还款-分析报告.pdf", pdf_bytes)
     zip_buf.seek(0)
 
     return StreamingResponse(
