@@ -7,7 +7,7 @@ import zipfile
 
 import openpyxl
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from mortgage_agent.calculator import LoanParams, Prepayment, simulate
@@ -50,7 +50,11 @@ def health() -> dict:
     return {"status": "ok"}
 
 
-@app.post("/v1/mortgages/prepayment:calc", response_model=CalcResponse, tags=["mortgage"])
+@app.post(
+    "/v1/mortgages/prepayment:calc",
+    tags=["mortgage"],
+    responses={400: {"description": "Invalid loan or prepayment parameters"}},
+)
 def calc_prepayment(body: LoanRequest) -> CalcResponse:
     try:
         params = LoanParams(
@@ -71,7 +75,11 @@ def calc_prepayment(body: LoanRequest) -> CalcResponse:
         savings_reduce_payment_interest=float(result.savings_reduce),
     )
 
-@app.post("/v1/mortgages/prepayment:export-zip", tags=["mortgage"])
+@app.post(
+    "/v1/mortgages/prepayment:export-zip",
+    tags=["mortgage"],
+    responses={400: {"description": "Invalid loan or prepayment parameters"}},
+)
 def export_zip(body: LoanRequest):
     """导出还款明细 ZIP（原方案/减少月供/缩短年限，各一份 Excel）。"""
     try:
@@ -88,10 +96,9 @@ def export_zip(body: LoanRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    pdf_path = generate_pdf(
+    pdf_bytes = generate_pdf(
         result=result,
         prepayment=prepay,
-        output_dir="output",
         original_principal=body.principal,
         original_annual_rate=body.annual_rate,
         original_term_months=body.term_months,
@@ -103,14 +110,17 @@ def export_zip(body: LoanRequest):
         zf.writestr("原方案.xlsx", _schedule_to_xlsx(result.base_schedule))
         zf.writestr("减少月供.xlsx", _schedule_to_xlsx(result.reduced_schedule))
         zf.writestr("缩短年限.xlsx", _schedule_to_xlsx(result.shorten_schedule))
-        with open(pdf_path, "rb") as f:
-            zf.writestr("报告.pdf", f.read())
+        zf.writestr("报告.pdf", pdf_bytes)
     zip_buf.seek(0)
 
     return StreamingResponse(
         zip_buf,
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=repayment_schedules.zip"},
+        headers={
+            "Content-Disposition": "attachment; filename=repayment_schedules.zip",
+            "X-Savings-Reduce": str(float(result.savings_reduce)),
+            "X-Savings-Shorten": str(float(result.savings_shorten)),
+        },
     )
 
 def _schedule_to_xlsx(schedule) -> bytes:

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import os
 import uuid
-import tempfile
 from datetime import date
 from typing import Tuple
+from io import BytesIO
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -131,26 +131,14 @@ def generate_pdf(
     *,
     result: SimulationResult,
     prepayment: Prepayment,
-    output_dir: str,
     original_principal: float,
     original_annual_rate: float,
     original_term_months: int,
     original_method: str,
-) -> str:
-    """根据 simulate 的结果生成 PDF，返回 PDF 文件路径。
+) -> bytes:
+    """根据 simulate 的结果生成 PDF，返回 PDF 二进制。"""
 
-    注意：PDF 首页展示的“原贷款信息”应使用用户输入的原始数据（LoanRequest），
-    而不是从还款表反推，避免不准确。
-    """
-
-    # 允许不传 output_dir，此时生成到系统临时目录
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-        pdf_path = os.path.join(output_dir, f"report_{uuid.uuid4().hex}.pdf")
-    else:
-        tmp = tempfile.NamedTemporaryFile(prefix="report_", suffix=".pdf", delete=False)
-        pdf_path = tmp.name
-        tmp.close()
+    pdf_buf = BytesIO()
 
     # 基准：剩余期数 & 关键数
     base_remaining_months = result.remaining_months
@@ -233,7 +221,7 @@ def generate_pdf(
     )
 
     doc = SimpleDocTemplate(
-        pdf_path,
+        pdf_buf,
         pagesize=A4,
         leftMargin=20 * mm,
         rightMargin=20 * mm,
@@ -469,5 +457,9 @@ def generate_pdf(
     )
 
     doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
-    return pdf_path
 
+    pdf_bytes = pdf_buf.getvalue()
+    pdf_buf.close()
+
+
+    return pdf_bytes

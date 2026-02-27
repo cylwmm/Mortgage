@@ -157,20 +157,17 @@ git push origin main
 
 - `POST /v1/mortgages/prepayment:calc`:
   **功能**: 计算提前还款可节省的利息。
-  **响应**: 返回两种方案（缩短年限/降低月供）的节省金额。
-
-- `POST /v1/mortgages/prepayment:report`:
-  **功能**: 生成详细的 PDF 分析报告。
-  **响应**: PDF 文件流。
+  **响应**: JSON，包含 `savings_shorten_interest` 与 `savings_reduce_payment_interest`。
 
 - `POST /v1/mortgages/prepayment:export-zip`:
   **功能**: 导出包含 PDF 报告和 Excel 还款明细的 ZIP 包。
-  **响应**: ZIP 文件流。
+  **响应**: ZIP 文件流，响应头携带 `X-Savings-Reduce` 和 `X-Savings-Shorten`，便于前端直接展示节省金额。
 
 **cURL 示例:**
 ```bash
 curl -X POST "http://127.0.0.1:8000/v1/mortgages/prepayment:export-zip" \
   -H "Content-Type: application/json" \
+  -D headers.txt \
   -o repayment_schedules.zip \
   -d '{
     "principal": 1000000,
@@ -182,6 +179,7 @@ curl -X POST "http://127.0.0.1:8000/v1/mortgages/prepayment:export-zip" \
     "invest_annual_rate": 2.5
   }'
 ```
+生成的 `headers.txt` 中会包含节省金额的响应头，ZIP 内含 3 份 Excel 与 1 份 PDF 报告。
 
 ---
 
