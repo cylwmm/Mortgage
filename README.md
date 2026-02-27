@@ -178,9 +178,8 @@ git push origin main
 - `annual_rate`: 年利率 (%)
 - `term_months`: 贷款总期数 (月)
 - `method`: 还款方式 (`equal_payment` 或 `equal_principal`)
-- `paid_periods`: 已还期数；如不传可结合 `first_payment_date` + `as_of_date` 估算
+- `paid_periods`: 已还期数；如不传可结合 `first_payment_date` 估算
 - `first_payment_date`: 首次还款日期（可选）
-- `as_of_date`: 测算日期/本次还款日（可选）
 - `annual_extra_amount`: 每年固定追加还款额 (元)
 - `recurring_start_date`: 首次年度定投日期（例如 2022-12-29）；之后每年同日定投
 
@@ -203,14 +202,9 @@ git push origin main
   **功能**: 定投式还款测算——在原月供基础上追加固定金额，计算提前结清所需期数、总利息以及相较基准方案节省的利息。
   **响应**: JSON，包含 `months_to_payoff`, `total_interest_with_recurring`, `base_remaining_interest`, `interest_savings_vs_base`, `total_payment_with_recurring`, `base_monthly_payment`, `recurring_extra_amount`。
 
-- `POST /v1/mortgages/recurring:calc-scheduled`:
-  **功能**: 指定测算日期与定投开始日期的定投式还款，可选按月或按年固定日期追加，计算多久还清、总利息与节省利息，并返回预计结清日期。
-  **请求体**: `principal`, `annual_rate`, `term_months`, `method`, `paid_periods`(可选)、`first_payment_date`(可选)、`as_of_date`(测算日)、`recurring_extra_amount`, `recurring_day`(可选提示)、`recurring_start_date`(可选，默认从 `as_of_date` 生效)，`frequency`(`monthly`/`annual`)，若 `annual` 需提供 `annual_month`, `annual_day`。
-  **响应**: JSON，包含 `months_to_payoff`, `payoff_date`, `total_interest_with_recurring`, `interest_savings_vs_base`, `base_remaining_interest`, `total_payment_with_recurring`, `base_monthly_payment`, `recurring_extra_amount`, `start_offset_months`, `first_annual_extra_date`。
-
 - `POST /v1/mortgages/recurring:annual`:
   **功能**: 年定投专用接口，仅使用年度参数（从首年定投日期开始，每年同日追加）。
-  **请求体**: `principal`, `annual_rate`, `term_months`, `method`, `paid_periods`(可选)、`first_payment_date`(可选)、`as_of_date`(可选)、`annual_extra_amount`, `recurring_start_date`。
+  **请求体**: `principal`, `annual_rate`, `term_months`, `method`, `paid_periods`(可选)、`first_payment_date`(可选)、`annual_extra_amount`, `recurring_start_date`。
   **响应**: JSON，包含 `months_to_payoff`, `payoff_date`, `total_interest_with_recurring`, `base_total_interest`, `interest_savings_vs_base`, `base_remaining_interest`, `total_payment_with_recurring`, `base_monthly_payment`, `annual_extra_amount`, `start_offset_months`, `first_annual_extra_date`。
 
 **cURL 示例:**
@@ -262,39 +256,6 @@ curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:calc" \
   }'
 ```
 
-**cURL 示例: 定投式还款（指定测算日 & 定投起始日）**
-```bash
-curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:calc-scheduled" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "principal": 1000000,
-    "annual_rate": 3.5,
-    "term_months": 360,
-    "method": "equal_payment",
-    "as_of_date": "2024-01-15",
-    "first_payment_date": "2022-01-15",
-    "recurring_extra_amount": 2000,
-    "recurring_start_date": "2024-03-15"
-  }'
-```
-
-**cURL 示例: 每年固定日期追加（12-30 还 50000 元）**
-```bash
-curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:calc-scheduled" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "principal": 1000000,
-    "annual_rate": 3.5,
-    "term_months": 360,
-    "method": "equal_payment",
-    "as_of_date": "2024-02-15",
-    "first_payment_date": "2022-01-15",
-    "frequency": "annual",
-    "annual_month": 12,
-    "annual_day": 30,
-    "recurring_extra_amount": 50000
-  }'
-```
 
 **cURL 示例: 年定投专用接口（从 2022-12-29 开始每年还 50000 元）**
 ```bash
@@ -306,7 +267,6 @@ curl -X POST "http://127.0.0.1:8000/v1/mortgages/recurring:annual" \
     "term_months": 360,
     "method": "equal_payment",
     "first_payment_date": "2021-10-01",
-    "as_of_date": "2021-10-01",
     "annual_extra_amount": 50000,
     "recurring_start_date": "2022-12-29"
   }'

@@ -177,119 +177,13 @@ class RecurringCalcResponse(BaseModel):
     recurring_extra_amount: float
 
 
-class ScheduledRecurringRequest(BaseModel):
-    principal: float = Field(..., gt=0, le=MAX_PRINCIPAL, description="贷款总额/本金（元）")
-    annual_rate: float = Field(..., ge=0, le=MAX_ANNUAL_RATE, description="年利率百分比，例如 3.5")
-    term_months: int = Field(..., gt=0, le=MAX_TERM_MONTHS, description="贷款总期数（月），例如 360")
-    method: str = Field(..., description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
-    paid_periods: Optional[int] = Field(None, ge=0, description="可选：已还期数（月）；如不填结合 first_payment_date + as_of_date 推算")
-    first_payment_date: Optional[date] = Field(None, description="可选：首次还款日期，用于推算已还期数")
-    as_of_date: Optional[date] = Field(None, description="测算日期/本次还款日，用于计算已还期数")
-    recurring_extra_amount: float = Field(..., gt=0, description="每月固定追加的定投还款额（元）")
-    recurring_day: Optional[int] = Field(None, ge=1, le=28, description="每月定投日(1-28)，仅用于提示")
-    recurring_start_date: Optional[date] = Field(None, description="定投开始日期，未填则默认从 as_of_date 开始生效")
-    frequency: str = Field("monthly", description="定投频率：monthly(默认)/annual")
-    annual_month: Optional[int] = Field(None, ge=1, le=12, description="frequency=annual 时：每年追加还款的月份(1-12)")
-    annual_day: Optional[int] = Field(None, ge=1, le=31, description="frequency=annual 时：每年追加还款的日期(1-31)")
-
-    @field_validator("method")
-    @classmethod
-    def _validate_method(cls, value: str) -> str:
-        if value not in ALLOWED_METHODS:
-            raise ValueError(f"method must be one of {sorted(ALLOWED_METHODS)}")
-        return value
-
-    @field_validator("frequency")
-    @classmethod
-    def _validate_frequency(cls, value: str) -> str:
-        normalized = (value or "").lower()
-        if normalized not in {"monthly", "annual"}:
-            raise ValueError("frequency must be monthly or annual")
-        return normalized
-
-    @model_validator(mode="after")
-    def _validate_ranges(self) -> "ScheduledRecurringRequest":
-        if self.paid_periods and self.paid_periods > self.term_months:
-            raise ValueError("paid_periods cannot exceed term_months")
-        if self.recurring_extra_amount > self.principal * MAX_PREPAY_RATIO:
-            raise ValueError("recurring_extra_amount exceeds allowed ratio of principal")
-        if self.first_payment_date and self.as_of_date and self.as_of_date < self.first_payment_date:
-            raise ValueError("as_of_date cannot be earlier than first_payment_date")
-        if self.frequency == "annual":
-            if not self.recurring_start_date and (not self.annual_month or not self.annual_day):
-                raise ValueError("annual_month and annual_day are required when frequency=annual without recurring_start_date")
-        return self
-
-
-class ScheduledRecurringResponse(BaseModel):
-    months_to_payoff: int
-    payoff_date: Optional[date]
-    total_interest_with_recurring: float
-    base_total_interest: float
-    interest_savings_vs_base: float
-    base_remaining_interest: float
-    total_payment_with_recurring: float
-    base_monthly_payment: float
-    recurring_extra_amount: float
-    start_offset_months: int
-    as_of_date: Optional[date]
-    recurring_start_date: Optional[date]
-    first_annual_extra_date: Optional[date]
-
-
-class LumpSumRecurringRequest(BaseModel):
-    principal: float = Field(..., gt=0, le=MAX_PRINCIPAL, description="贷款总额/本金（元）")
-    annual_rate: float = Field(..., ge=0, le=MAX_ANNUAL_RATE, description="年利率百分比，例如 3.5")
-    term_months: int = Field(..., gt=0, le=MAX_TERM_MONTHS, description="贷款总期数（月），例如 360")
-    method: str = Field(..., description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
-    paid_periods: Optional[int] = Field(None, ge=0, description="已还期数（月）；如不填可结合 first_payment_date 推算")
-    first_payment_date: Optional[date] = Field(None, description="首次还款日期，用于推算已还期数")
-    repayment_date: Optional[date] = Field(None, description="本次测算/还款日，用于确定已还期数及预计结清日")
-    recurring_extra_amount: float = Field(..., gt=0, description="每期固定追加的定投还款额（元）")
-    recurring_day: Optional[int] = Field(None, ge=1, le=28, description="每月定投日(1-28)，用于提示")
-    recurring_start_date: Optional[date] = Field(None, description="定投开始日期；为空则默认从 repayment_date 开始")
-
-    @field_validator("method")
-    @classmethod
-    def _validate_method(cls, value: str) -> str:
-        if value not in ALLOWED_METHODS:
-            raise ValueError(f"method must be one of {sorted(ALLOWED_METHODS)}")
-        return value
-
-    @model_validator(mode="after")
-    def _validate_ranges(self) -> "LumpSumRecurringRequest":
-        if self.paid_periods and self.paid_periods > self.term_months:
-            raise ValueError("paid_periods cannot exceed term_months")
-        if self.recurring_extra_amount > self.principal * MAX_PREPAY_RATIO:
-            raise ValueError("recurring_extra_amount exceeds allowed ratio of principal")
-        if self.first_payment_date and self.repayment_date and self.repayment_date < self.first_payment_date:
-            raise ValueError("repayment_date cannot be earlier than first_payment_date")
-        return self
-
-
-class LumpSumRecurringResponse(BaseModel):
-    months_to_payoff: int
-    payoff_date: Optional[date]
-    total_interest_with_recurring: float
-    base_total_interest: float
-    interest_savings_vs_base: float
-    base_remaining_interest: float
-    total_payment_with_recurring: float
-    base_monthly_payment: float
-    recurring_extra_amount: float
-    start_offset_months: int
-    repayment_date: Optional[date]
-    recurring_start_date: Optional[date]
-
-
 class AnnualRecurringRequest(BaseModel):
     principal: float = Field(..., gt=0, le=MAX_PRINCIPAL, description="贷款总额/本金（元）")
     annual_rate: float = Field(..., ge=0, le=MAX_ANNUAL_RATE, description="年利率百分比，例如 3.5")
     term_months: int = Field(..., gt=0, le=MAX_TERM_MONTHS, description="贷款总期数（月），例如 360")
     method: str = Field(..., description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
-    paid_periods: Optional[int] = Field(None, ge=0, description="已还期数（月）；如不填结合 first_payment_date + as_of_date 推算")
+    paid_periods: Optional[int] = Field(None, ge=0, description="已还期数（月）；如不填结合 first_payment_date 推算")
     first_payment_date: Optional[date] = Field(None, description="首次还款日期，用于推算已还期数")
-    as_of_date: Optional[date] = Field(None, description="测算日期/本次还款日，用于计算已还期数")
     annual_extra_amount: float = Field(..., gt=0, description="每年固定追加的定投还款额（元）")
     recurring_start_date: date = Field(..., description="首次年度定投日期（例如 2022-12-29）；之后每年同日定投")
 
@@ -306,8 +200,6 @@ class AnnualRecurringRequest(BaseModel):
             raise ValueError("paid_periods cannot exceed term_months")
         if self.annual_extra_amount > self.principal * MAX_PREPAY_RATIO:
             raise ValueError("annual_extra_amount exceeds allowed ratio of principal")
-        if self.first_payment_date and self.as_of_date and self.as_of_date < self.first_payment_date:
-            raise ValueError("as_of_date cannot be earlier than first_payment_date")
         return self
 
 
@@ -322,7 +214,6 @@ class AnnualRecurringResponse(BaseModel):
     base_monthly_payment: float
     annual_extra_amount: float
     start_offset_months: int
-    as_of_date: Optional[date]
     first_annual_extra_date: Optional[date]
 
 
@@ -511,117 +402,6 @@ def calc_recurring_extra(request: Request, body: RecurringInvestmentRequest, _=D
 
 
 @app.post(
-    "/v1/mortgages/recurring:calc-scheduled",
-    tags=["mortgage"],
-    responses={400: {"description": "Invalid scheduled recurring repayment parameters"}},
-)
-@limiter.limit(DEFAULT_RATE_LIMIT)
-def calc_scheduled_recurring(request: Request, body: ScheduledRecurringRequest, _=Depends(require_api_key)) -> ScheduledRecurringResponse:
-    try:
-        params = LoanParams(
-            principal=body.principal,
-            annual_rate=body.annual_rate,
-            term_months=body.term_months,
-            method=body.method,
-            paid_periods=body.paid_periods,
-            first_payment_date=body.first_payment_date,
-        )
-        as_of_date = body.as_of_date or body.first_payment_date or date.today()
-        start_offset = 0
-        first_extra_date: Optional[date] = None
-        if body.frequency == "annual":
-            first_extra_date = _resolve_first_annual_date(
-                as_of_date,
-                recurring_start_date=body.recurring_start_date,
-                annual_month=body.annual_month,
-                annual_day=body.annual_day,
-            )
-            start_offset = _months_between(as_of_date, first_extra_date)
-            result = simulate_annual_recurring_extra(
-                params,
-                annual_extra=body.recurring_extra_amount,
-                as_of_date=as_of_date,
-                months_until_first_extra=start_offset,
-            )
-        else:
-            if body.recurring_start_date:
-                start_offset = _months_between(as_of_date, body.recurring_start_date)
-            result = simulate_recurring_extra(
-                params,
-                recurring_extra=body.recurring_extra_amount,
-                as_of_date=as_of_date,
-                start_offset_months=start_offset,
-            )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    payoff_date = _add_months(as_of_date, result.months_with_recurring) if as_of_date else None
-
-    return ScheduledRecurringResponse(
-        months_to_payoff=result.months_with_recurring,
-        payoff_date=payoff_date,
-        total_interest_with_recurring=float(result.total_interest_with_recurring),
-        base_total_interest=float(result.base_total_interest),
-        interest_savings_vs_base=float(result.interest_savings),
-        base_remaining_interest=float(result.base_remaining_interest),
-        total_payment_with_recurring=float(result.total_payment_with_recurring),
-        base_monthly_payment=float(result.base_monthly_payment),
-        recurring_extra_amount=float(result.recurring_extra_payment),
-        start_offset_months=start_offset,
-        as_of_date=as_of_date,
-        recurring_start_date=body.recurring_start_date,
-        first_annual_extra_date=first_extra_date,
-    )
-
-
-@app.post(
-    "/v1/mortgages/recurring:lump-sum",
-    tags=["mortgage"],
-    responses={400: {"description": "Invalid lump-sum recurring repayment parameters"}},
-)
-@limiter.limit(DEFAULT_RATE_LIMIT)
-def calc_lump_sum_recurring(request: Request, body: LumpSumRecurringRequest, _=Depends(require_api_key)) -> LumpSumRecurringResponse:
-    try:
-        params = LoanParams(
-            principal=body.principal,
-            annual_rate=body.annual_rate,
-            term_months=body.term_months,
-            method=body.method,
-            paid_periods=body.paid_periods,
-            first_payment_date=body.first_payment_date,
-        )
-        repayment_date = body.repayment_date or body.first_payment_date or date.today()
-        start_offset = 0
-        if body.recurring_start_date:
-            start_offset = _months_between(repayment_date, body.recurring_start_date)
-        result = simulate_recurring_extra(
-            params,
-            recurring_extra=body.recurring_extra_amount,
-            as_of_date=repayment_date,
-            start_offset_months=start_offset,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    payoff_date = _add_months(repayment_date, result.months_with_recurring) if repayment_date else None
-
-    return LumpSumRecurringResponse(
-        months_to_payoff=result.months_with_recurring,
-        payoff_date=payoff_date,
-        total_interest_with_recurring=float(result.total_interest_with_recurring),
-        base_total_interest=float(result.base_total_interest),
-        interest_savings_vs_base=float(result.interest_savings),
-        base_remaining_interest=float(result.base_remaining_interest),
-        total_payment_with_recurring=float(result.total_payment_with_recurring),
-        base_monthly_payment=float(result.base_monthly_payment),
-        recurring_extra_amount=float(result.recurring_extra_payment),
-        start_offset_months=start_offset,
-        repayment_date=repayment_date,
-        recurring_start_date=body.recurring_start_date,
-    )
-
-
-@app.post(
     "/v1/mortgages/recurring:annual",
     tags=["mortgage"],
     responses={400: {"description": "Invalid annual recurring repayment parameters"}},
@@ -637,7 +417,7 @@ def calc_annual_recurring(request: Request, body: AnnualRecurringRequest, _=Depe
             paid_periods=body.paid_periods,
             first_payment_date=body.first_payment_date,
         )
-        as_of_date = body.as_of_date or body.first_payment_date or date.today()
+        as_of_date = body.recurring_start_date
         first_extra_date = _resolve_first_annual_date(
             as_of_date,
             recurring_start_date=body.recurring_start_date,
@@ -667,7 +447,6 @@ def calc_annual_recurring(request: Request, body: AnnualRecurringRequest, _=Depe
         base_monthly_payment=float(result.base_monthly_payment),
         annual_extra_amount=float(result.recurring_extra_payment),
         start_offset_months=start_offset,
-        as_of_date=as_of_date,
         first_annual_extra_date=first_extra_date,
     )
 
