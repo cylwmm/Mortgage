@@ -3,6 +3,15 @@ services:
   mortgage-api:
     image: ${DOCKER_USERNAME}/mortgage-agent:${DOCKER_IMAGE_TAG:-latest}
     container_name: mortgage-api
+    command:
+      - uvicorn
+      - mortgage_agent.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "4"
     restart: always
     ports:
       # 内部端口 8000，可通过 Nginx 反向代理访问
@@ -26,10 +35,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1'
+          cpus: '2'
           memory: 512M
         reservations:
-          cpus: '0.5'
+          cpus: '1'
           memory: 256M
     networks:
       - mortgage-network
