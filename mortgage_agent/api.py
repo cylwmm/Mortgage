@@ -48,9 +48,9 @@ class CalcResponse(BaseModel):
 
 
 class CombinedLoanRequest(BaseModel):
-    fund_principal: float = Field(..., gt=0, description="公积金贷款本金（元）")
+    fund_principal: float = Field(..., ge=0, description="公积金贷款本金（元）；0 表示无公积金贷款")
     fund_annual_rate: float = Field(..., ge=0, description="公积金贷款年利率（%）")
-    commercial_principal: float = Field(..., gt=0, description="商业贷款本金（元）")
+    commercial_principal: float = Field(..., ge=0, description="商业贷款本金（元）；0 表示无商业贷款")
     commercial_annual_rate: float = Field(..., ge=0, description="商业贷款年利率（%）")
     term_months: int = Field(..., gt=0, description="贷款总期数（月）")
     method: str = Field("equal_payment", description="还款方式：equal_payment(等额本息) / equal_principal(等额本金)")
@@ -141,6 +141,9 @@ def export_zip(body: LoanRequest):
 )
 def export_combined_schedule(body: CombinedLoanRequest):
     """组合贷（公积金 + 商贷）还款计划导出 Excel，响应头返回总利息。"""
+    if body.fund_principal <= 0 and body.commercial_principal <= 0:
+        raise HTTPException(status_code=400, detail="fund_principal 与 commercial_principal 不能同时为 0")
+
     try:
         method = normalize_method(body.method)
         fund_schedule = build_schedule(
@@ -172,7 +175,13 @@ def export_combined_schedule(body: CombinedLoanRequest):
         combined.append(ScheduleRow(idx + 1, payment, principal, interest, balance))
         total_interest += interest
 
-    xlsx_bytes = _schedule_to_xlsx(combined)
+    xlsx_bytes = _combined_schedule_to_xlsx(
+        combined,
+        commercial_schedule,
+        fund_schedule,
+        include_commercial=body.commercial_principal > 0,
+        include_fund=body.fund_principal > 0,
+    )
     stream = BytesIO(xlsx_bytes)
     stream.seek(0)
 
@@ -239,3 +248,102 @@ def _schedule_to_xlsx(schedule) -> bytes:
     wb.save(buf)
     buf.seek(0)
     return buf.getvalue()
+
+
+def _combined_schedule_to_xlsx(
+    combined: list[ScheduleRow],
+    commercial_schedule: list[ScheduleRow],
+    fund_schedule: list[ScheduleRow],
+    include_commercial: bool,
+    include_fund: bool,
+) -> bytes:
+    """组合贷专用：动态输出商贷/公积金列，含各自利息占比与总利息占比。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Combined"
+
+    headers = ["期数", "月供总额"]
+    if include_commercial:
+        headers += [
+            "商贷月供总额",
+            "商贷本金",
+            "商贷利息",
+            "商贷余额",
+            "商贷利息占比",
+        ]
+    if include_fund:
+        headers += [
+            "公积金月供总额",
+            "公积金本金",
+            "公积金利息",
+            "公积金余额",
+            "公积金利息占比",
+        ]
+    headers.append("利息总占比")
+    ws.append(headers)
+
+    header_font = Font(bold=True, name="Arial", size=11, color="FFFFFF")
+    body_font = Font(name="Arial", size=10)
+    header_fill = PatternFill("solid", fgColor="0F172A")
+    alt_fill = PatternFill("solid", fgColor="F8FAFC")
+    border = Border(bottom=Side(style="thin", color="E2E8F0"))
+    align_right = Alignment(horizontal="right")
+    align_center = Alignment(horizontal="center")
+
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = align_center
+
+    max_len = len(combined)
+    for idx in range(max_len):
+        combined_row = combined[idx]
+        row_values = [
+            combined_row.month_index,
+            round(combined_row.payment, 2),
+        ]
+
+        if include_commercial:
+            c = commercial_schedule[idx] if idx < len(commercial_schedule) else ScheduleRow(idx + 1, 0, 0, 0, 0)
+            c_ratio = (c.interest / c.payment * 100) if c.payment else 0.0
+            row_values += [
+                round(c.payment, 2),
+                round(c.principal, 2),
+                round(c.interest, 2),
+                round(c.balance, 2),
+                f"{c_ratio:.2f}%",
+            ]
+
+        if include_fund:
+            f = fund_schedule[idx] if idx < len(fund_schedule) else ScheduleRow(idx + 1, 0, 0, 0, 0)
+            f_ratio = (f.interest / f.payment * 100) if f.payment else 0.0
+            row_values += [
+                round(f.payment, 2),
+                round(f.principal, 2),
+                round(f.interest, 2),
+                round(f.balance, 2),
+                f"{f_ratio:.2f}%",
+            ]
+
+        total_ratio = (combined_row.interest / combined_row.payment * 100) if combined_row.payment else 0.0
+        row_values.append(f"{total_ratio:.2f}%")
+
+        ws.append(row_values)
+
+        for col_idx in range(1, len(row_values) + 1):
+            cell = ws.cell(row=idx + 2, column=col_idx)
+            cell.font = body_font
+            cell.alignment = align_right if col_idx > 1 else align_center
+            if (idx + 2) % 2 == 0:
+                cell.fill = alt_fill
+            cell.border = border
+
+    # 简单列宽设置
+    for i in range(1, len(headers) + 1):
+        ws.column_dimensions[get_column_letter(i)].width = 14
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
