@@ -299,7 +299,8 @@ def export_zip(request: Request, body: LoanRequest, _=Depends(require_api_key)):
         BytesIO(zip_bytes),
         media_type="application/zip",
         headers={
-            "Content-Disposition": "attachment; filename=提前还款分析报告.zip",
+            "Content-Disposition": "attachment; filename=prepayment_report.zip; "
+            f"filename*=UTF-8''{quote('提前还款分析报告.zip')}",
             "X-Savings-Reduce": f"{float(result.savings_reduce):.2f}",
             "X-Savings-Shorten": f"{float(result.savings_shorten):.2f}",
         },
