@@ -34,6 +34,10 @@ MAX_PREPAY_RATIO = float(os.getenv("MAX_PREPAY_RATIO", "1.0"))
 MAX_SCHEDULE_ROWS = int(os.getenv("MAX_SCHEDULE_ROWS", "2000"))
 MAX_EXPORT_BYTES = int(os.getenv("MAX_EXPORT_BYTES", str(6 * 1024 * 1024)))
 ALLOWED_METHODS = {"equal_payment", "equal_principal"}
+ROOT_PATH = os.getenv("ROOT_PATH", "").strip()
+if ROOT_PATH and not ROOT_PATH.startswith("/"):
+    ROOT_PATH = f"/{ROOT_PATH}"
+ROOT_PATH = ROOT_PATH.rstrip("/")
 
 
 def _client_ip(request: Request) -> str:
@@ -54,6 +58,7 @@ app = FastAPI(
     title="息策 Agent",
     description="不只是计算器，是帮你省下一辆车的房贷管家。",
     version="0.1.0",
+    root_path=ROOT_PATH,
 )
 app.state.limiter = limiter
 app.add_middleware(SlowAPIMiddleware)

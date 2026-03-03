@@ -1,0 +1,35 @@
+{
+  "envId": "${TCB_ENV_ID}",
+  "framework": {
+    "name": "mortgage-agent",
+    "plugins": {
+      "service": {
+        "use": "@cloudbase/framework-plugin-container",
+        "inputs": {
+          "serviceName": "mortgage-agent",
+          "servicePath": "/",
+          "uploadType": "image",
+          "imageInfo": {
+            "imageUrl": "${IMAGE_URL}"
+          },
+          "containerPort": ${CONTAINER_PORT},
+          "cpu": 1,
+          "mem": 2,
+          "minNum": 0,
+          "maxNum": 2,
+          "policyType": "cpu",
+          "policyThreshold": 60,
+          "envVariables": {
+            "PORT": "${CONTAINER_PORT}",
+            "ROOT_PATH": "${ROOT_PATH}",
+            "LOG_LEVEL": "${LOG_LEVEL}",
+            "RATE_LIMIT_DEFAULT": "${RATE_LIMIT_DEFAULT}",
+            "RATE_LIMIT_EXPORT": "${RATE_LIMIT_EXPORT}",
+            "UVICORN_WORKERS": "${UVICORN_WORKERS}"
+          }
+        }
+      }
+    }
+  }
+}
+

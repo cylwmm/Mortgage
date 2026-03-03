@@ -9,13 +9,13 @@ services:
       - --host
       - 0.0.0.0
       - --port
-      - "8000"
+      - "${PORT:-8000}"
       - --workers
-      - "2"
+      - "${UVICORN_WORKERS:-2}"
     restart: always
     ports:
       # 内部端口 8000，可通过 Nginx 反向代理访问
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${PORT:-8000}:${PORT:-8000}"
     environment:
       # 环境变量配置
       PYTHONUNBUFFERED: "1"
@@ -26,13 +26,16 @@ services:
       MAX_SCHEDULE_ROWS: ${MAX_SCHEDULE_ROWS:-2000}
       MAX_EXPORT_BYTES: ${MAX_EXPORT_BYTES:-6291456}
       API_KEY: ${API_KEY:-}
+      PORT: ${PORT:-8000}
+      ROOT_PATH: ${ROOT_PATH:-}
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
     volumes:
       # 输出目录挂载（用于保存 PDF/ZIP 报告）
       - ./output:/app/output
       # 日志目录挂载
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:${PORT:-8000}/health"]
       interval: 30s
       timeout: 3s
       retries: 3

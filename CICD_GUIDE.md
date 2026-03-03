@@ -487,3 +487,17 @@ systemctl status mortgage-agent
 - [Nginx 配置指南](https://nginx.org/en/docs/)
 - [Let's Encrypt](https://letsencrypt.org/)
 
+## 🌥️ 微信小程序云托管部署
+
+依赖新的 GitHub Actions 工作流 `Deploy to WeChat Cloud Hosting`（手动触发）。准备好以下 Secrets 后，即可一键构建镜像并发布到腾讯云 CloudBase/云托管：
+
+- `TCB_ENV_ID`、`TCB_REGION`、`TCB_SECRET_ID`、`TCB_SECRET_KEY`：CloudBase 环境与访问密钥
+- `TCR_SERVER`、`TCR_NAMESPACE`、`TCR_USERNAME`、`TCR_PASSWORD`：腾讯云容器镜像服务（TCR）仓库信息
+- 可选：`LOG_LEVEL`、`RATE_LIMIT_DEFAULT`、`RATE_LIMIT_EXPORT`、`ROOT_PATH`、`UVICORN_WORKERS`
+
+触发步骤：
+1. 在 GitHub Actions 选择 **Deploy to WeChat Cloud Hosting** → `Run workflow`，可填写自定义 `image_tag`（默认使用当前 commit SHA）。
+2. 工作流会构建并推送镜像到 TCR，然后渲染 `cloudbaserc.json` 并调用 `TencentCloudBase/cloudbase-action@v2` 部署。
+3. 云托管会自动注入 `PORT` 环境变量，若通过网关设置了路径前缀，可在 Secrets 中设置 `ROOT_PATH` 与之对应。
+
+云托管使用 `cloudbaserc.json` 描述容器服务，默认 CPU=1、内存=2GiB，副本范围 0-2（按 CPU 自动扩缩容）。根据需求在文件或工作流中调整 `CONTAINER_PORT`、资源规格或环境变量。
